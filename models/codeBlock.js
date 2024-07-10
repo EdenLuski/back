@@ -1,12 +1,15 @@
 const mongoose = require("mongoose");
 
-const codeBlockSchema = new mongoose.Schema({
-  _id:{type:Number,require:true},
-  name: { type: String, require: true },
-  code: { type: String, default: "// Write code here" },
-  solution: { type: String, require: true },
-  users: { type: Number, default: 0 },
-  mentor: { type: String, default: null },
-});
+const codeBlockSchema = new mongoose.Schema(
+  {
+    _id: { type: Number, required: true },
+    name: { type: String, required: true },
+    code: { type: String, default: "// Write code here" },
+    solution: { type: String, required: true },
+    users: { type: [String], default: [] },
+    mentor: { type: String, default: null },
+  },
+  { versionKey: "__v" }
+); // Add this line
 
 module.exports = mongoose.model("CodeBlock", codeBlockSchema);

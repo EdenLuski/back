@@ -6,28 +6,23 @@ const CodeBlock = require("./models/codeBlock");
 const cors = require("cors");
 const codeBlockRoute = require("./routes/codeBlocks");
 
-// שימוש ב-CORS כדי לאפשר קריאות חוצה דומיינים
 const app = express();
 app.use(cors());
 app.use(express.json());
-// הגדרת נתיב API לניהול קוד
 app.use("/api/codeblocks", codeBlockRoute);
 
-// הגדרת Socket.io עם תמיכה ב-CORS
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:3000",
+    origin: "https://tom-class.netlify.app",
     methods: ["GET", "POST"],
     allowedHeaders: ["my-custom-header"],
     credentials: true,
   },
 });
 
-// חיבור למסד הנתונים
 connectDB();
 
-// פונקציה לאתחול מסד הנתונים עם בלוקים ראשוניים
 const initializeDB = async () => {
   const initialCodeBlocks = [
     { _id: 1, name: "Async case", solution: "....code..." },
@@ -45,10 +40,8 @@ const initializeDB = async () => {
   }
 };
 
-// קריאה לפונקציה לאתחול מסד הנתונים
 initializeDB();
 
-// טיפול בחיבורי Socket.io
 io.on("connection", (socket) => {
   socket.on("join", async ({ codeBlockId }) => {
     if (!codeBlockId) {
@@ -56,24 +49,18 @@ io.on("connection", (socket) => {
       return;
     }
 
-    let block = await CodeBlock.findById(codeBlockId);
+    let block = await CodeBlock.findOneAndUpdate(
+      { _id: codeBlockId },
+      {
+        $addToSet: { users: socket.id },
+        $setOnInsert: { mentor: socket.id, code: "// Write code here" },
+      },
+      { new: true, upsert: true }
+    );
 
-    if (!block) {
-      block = new CodeBlock({
-        _id: codeBlockId,
-        name: `Block ${codeBlockId}`,
-        solution: "....code.....",
-        mentor: socket.id,
-        users: 1,
-      });
-      await block.save();
-    } else if (block.mentor === null || block.mentor === "") {
+    // Check if there's no mentor in the room, and set the current user as the mentor
+    if (!block.mentor) {
       block.mentor = socket.id;
-      block.users = 1;
-      await block.save();
-    } else {
-      block.users += 1;
-      await block.save();
     }
 
     socket.join(codeBlockId);
@@ -84,49 +71,78 @@ io.on("connection", (socket) => {
       role: block.mentor === socket.id ? "mentor" : "student",
     });
 
-    socket.emit("init", {
-      initialCode: block.code,
-      solution: block.solution,
-      role: block.mentor === socket.id ? "mentor" : "student",
-      students: block.users,
-    });
+    // Count the number of students only
+    const studentCount = block.users.filter(
+      (userId) => userId !== block.mentor
+    ).length;
 
-    io.to(codeBlockId).emit("studentsCount", block.users);
+    if (block.mentor !== socket.id) {
+      socket.emit("init", {
+        initialCode: block.code,
+        solution: block.solution,
+        role: block.mentor === socket.id ? "mentor" : "student",
+        students: studentCount,
+      });
+    } else {
+      // If the user is the mentor, don't send the "reset" event
+      socket.emit("init", {
+        initialCode: block.code,
+        solution: block.solution,
+        role: "mentor",
+        students: studentCount,
+      });
+    }
+
+    io.to(codeBlockId).emit("studentsCount", studentCount);
   });
 
   socket.on("codeChange", async ({ codeBlockId, newCode }) => {
-    let block = await CodeBlock.findById(codeBlockId);
+    let block = await CodeBlock.findByIdAndUpdate(
+      codeBlockId,
+      { $set: { code: newCode } },
+      { new: true }
+    );
     if (block) {
-      block.code = newCode;
-      await block.save();
       console.log("Code changed", { codeBlockId, newCode });
       io.to(codeBlockId).emit("codeUpdate", newCode);
     }
   });
 
   socket.on("solutionChange", async ({ codeBlockId, newSolution }) => {
-    let block = await CodeBlock.findById(codeBlockId);
+    let block = await CodeBlock.findByIdAndUpdate(
+      codeBlockId,
+      { $set: { solution: newSolution } },
+      { new: true }
+    );
     if (block) {
-      block.solution = newSolution;
-      await block.save();
       console.log("Solution changed", { codeBlockId, newSolution });
       io.to(codeBlockId).emit("solutionUpdate", newSolution);
     }
   });
 
   socket.on("leave", async ({ codeBlockId }) => {
-    let block = await CodeBlock.findById(codeBlockId);
+    let block = await CodeBlock.findByIdAndUpdate(
+      codeBlockId,
+      { $pull: { users: socket.id } },
+      { new: true }
+    );
     if (block) {
-      block.users -= 1;
       if (block.mentor === socket.id) {
-        block.mentor = null;
+        // Choose another user as the mentor, if available
+        block.mentor = block.users[0] || null;
+        block.users = []; // Reset users count when mentor leaves
+        block.code = "// Write your code here"; // Reset code when mentor leaves
+        await block.save();
+        io.to(codeBlockId).emit("reset"); // Notify students to leave and reset
+        io.to(codeBlockId).socketsLeave(codeBlockId); // Disconnect all users in the room
+      } else {
+        // Count the number of students only
+        const studentCount = block.users.filter(
+          (userId) => userId !== block.mentor
+        ).length;
+        await block.save();
+        io.to(codeBlockId).emit("studentsCount", studentCount);
       }
-      if (block.users === 0) {
-        block.code = "// Write your code here";
-      }
-      await block.save();
-      console.log("User left", { codeBlockId, socketId: socket.id });
-      io.to(codeBlockId).emit("studentsCount", block.users);
     } else {
       console.error(`CodeBlock with ID ${codeBlockId} not found`);
     }
@@ -137,20 +153,26 @@ io.on("connection", (socket) => {
     const codeBlocks = await CodeBlock.find();
     for (const block of codeBlocks) {
       if (block.mentor === socket.id) {
-        block.mentor = null;
-        block.users -= 1;
-        if (block.users <= 0) {
-          block.users = 0;
-          block.code = "// Write your code here";
-        }
+        // Choose another user as the mentor, if available
+        block.mentor = block.users[0] || null;
+        block.users = []; // Reset users count when mentor disconnects
+        block.code = "// Write your code here"; // Reset code when mentor disconnects
         await block.save();
-        io.to(block._id).emit("studentsCount", block.users);
+        io.to(block._id).emit("reset"); // Notify students to leave and reset
+        io.to(block._id).socketsLeave(block._id); // Disconnect all users in the room
+      } else {
+        block.users = block.users.filter((userId) => userId !== socket.id);
+        await block.save();
+        // Count the number of students only
+        const studentCount = block.users.filter(
+          (userId) => userId !== block.mentor
+        ).length;
+        io.to(block._id).emit("studentsCount", studentCount);
       }
     }
   });
 });
 
-// הפעלת השרת והאזנה לפורט 3001
 server.listen(3001, () => {
   console.log("Server is running on port 3001");
 });
