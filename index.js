@@ -14,22 +14,23 @@ app.use("/api/codeblocks", codeBlockRoute);
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "https://tom-class.netlify.app",
+    origin: "http://localhost:3000",
     methods: ["GET", "POST"],
     allowedHeaders: ["my-custom-header"],
     credentials: true,
   },
 });
+
 connectDB();
 
-const initialCodeBlocks = [
-  { _id: 1, name: "Async case", solution: "....code..." },
-  { _id: 2, name: "Promises", solution: "....code..." },
-  { _id: 3, name: "Callbacks", solution: "....code..." },
-  { _id: 4, name: "Event Loop", solution: "....code..." },
-];
-
 const initializeDB = async () => {
+  const initialCodeBlocks = [
+    { _id: 1, name: "Async case", solution: "....code..." },
+    { _id: 2, name: "Promises", solution: "....code..." },
+    { _id: 3, name: "Callbacks", solution: "....code..." },
+    { _id: 4, name: "Event Loop", solution: "....code..." },
+  ];
+
   for (const block of initialCodeBlocks) {
     let existingBlock = await CodeBlock.findById(block._id);
     if (!existingBlock) {
@@ -42,43 +43,46 @@ const initializeDB = async () => {
 initializeDB();
 
 io.on("connection", (socket) => {
-  socket.on("join", async ({ codeBlockId, isMentor }) => {
-    let block = await CodeBlock.findById(codeBlockId);
+  socket.on("join", async ({ codeBlockId }) => {
     if (!codeBlockId) {
-      console.error("codeBLockId is undined");
+      console.error("codeBlockId is undefined");
+      return;
     }
+
+    let block = await CodeBlock.findById(codeBlockId);
 
     if (!block) {
       block = new CodeBlock({
         _id: codeBlockId,
         name: `Block ${codeBlockId}`,
         solution: "....code.....",
+        mentor: socket.id,
+        users: 1,
       });
+      await block.save();
+    } else if (block.mentor === null || block.mentor === "") {
+      block.mentor = socket.id;
+      block.users = 1;
+      await block.save();
+    } else {
+      block.users += 1;
       await block.save();
     }
 
-    if (block.mentor === null && isMentor) {
-      block.mentor = socket.id;
-      block.users += 1;
-      await block.save();
-      socket.emit("init", {
-        initialCode: block.code,
-        role: "mentor",
-        students: block.users,
-      });
-      socket.join(codeBlockId);
-    } else if (block.mentor !== null && !isMentor) {
-      block.users += 1;
-      await block.save();
-      socket.emit("init", {
-        initialCode: block.code,
-        role: "student",
-        students: block.users,
-      });
-      socket.join(codeBlockId);
-    } else {
-      socket.emit("error", "Mentor must join first");
-    }
+    socket.join(codeBlockId);
+
+    console.log("User joined", {
+      codeBlockId,
+      socketId: socket.id,
+      role: block.mentor === socket.id ? "mentor" : "student",
+    });
+
+    socket.emit("init", {
+      initialCode: block.code,
+      solution: block.solution,
+      role: block.mentor === socket.id ? "mentor" : "student",
+      students: block.users,
+    });
 
     io.to(codeBlockId).emit("studentsCount", block.users);
   });
@@ -88,6 +92,7 @@ io.on("connection", (socket) => {
     if (block) {
       block.code = newCode;
       await block.save();
+      console.log("Code changed", { codeBlockId, newCode });
       io.to(codeBlockId).emit("codeUpdate", newCode);
     }
   });
@@ -97,6 +102,7 @@ io.on("connection", (socket) => {
     if (block) {
       block.solution = newSolution;
       await block.save();
+      console.log("Solution changed", { codeBlockId, newSolution });
       io.to(codeBlockId).emit("solutionUpdate", newSolution);
     }
   });
@@ -112,14 +118,28 @@ io.on("connection", (socket) => {
         block.code = "// Write your code here";
       }
       await block.save();
+      console.log("User left", { codeBlockId, socketId: socket.id });
       io.to(codeBlockId).emit("studentsCount", block.users);
     } else {
-      console.error(`CodeBLock with ID ${codeBlockId} no found`);
+      console.error(`CodeBlock with ID ${codeBlockId} not found`);
     }
   });
 
-  socket.on("disconnect", () => {
-    console.log("Client disconnected");
+  socket.on("disconnect", async () => {
+    console.log("Client disconnected", socket.id);
+    const codeBlocks = await CodeBlock.find();
+    for (const block of codeBlocks) {
+      if (block.mentor === socket.id) {
+        block.mentor = null;
+        block.users -= 1;
+        if (block.users <= 0) {
+          block.users = 0;
+          block.code = "// Write your code here";
+        }
+        await block.save();
+        io.to(block._id).emit("studentsCount", block.users);
+      }
+    }
   });
 });
 
