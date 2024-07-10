@@ -6,11 +6,14 @@ const CodeBlock = require("./models/codeBlock");
 const cors = require("cors");
 const codeBlockRoute = require("./routes/codeBlocks");
 
+// שימוש ב-CORS כדי לאפשר קריאות חוצה דומיינים
 const app = express();
 app.use(cors());
 app.use(express.json());
+// הגדרת נתיב API לניהול קוד
 app.use("/api/codeblocks", codeBlockRoute);
 
+// הגדרת Socket.io עם תמיכה ב-CORS
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
@@ -21,8 +24,10 @@ const io = socketIo(server, {
   },
 });
 
+// חיבור למסד הנתונים
 connectDB();
 
+// פונקציה לאתחול מסד הנתונים עם בלוקים ראשוניים
 const initializeDB = async () => {
   const initialCodeBlocks = [
     { _id: 1, name: "Async case", solution: "....code..." },
@@ -40,8 +45,10 @@ const initializeDB = async () => {
   }
 };
 
+// קריאה לפונקציה לאתחול מסד הנתונים
 initializeDB();
 
+// טיפול בחיבורי Socket.io
 io.on("connection", (socket) => {
   socket.on("join", async ({ codeBlockId }) => {
     if (!codeBlockId) {
@@ -143,6 +150,7 @@ io.on("connection", (socket) => {
   });
 });
 
+// הפעלת השרת והאזנה לפורט 3001
 server.listen(3001, () => {
   console.log("Server is running on port 3001");
 });
