@@ -14,7 +14,7 @@ app.use("/api/codeblocks", codeBlockRoute);
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "hthttps://668e8a1a7812e700a22a4111--deluxe-squirrel-94fdab.netlify.app/",
+    origin: "https://668e8a1a7812e700a22a4111--deluxe-squirrel-94fdab.netlify.app",
     methods: ["GET", "POST"],
     allowedHeaders: ["my-custom-header"],
     credentials: true,
